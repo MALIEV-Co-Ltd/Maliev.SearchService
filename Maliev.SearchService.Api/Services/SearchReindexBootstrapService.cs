@@ -19,6 +19,7 @@ public class SearchReindexBootstrapService(
 {
     private static readonly TimeSpan InitialDelay = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(20);
+    private const int MinimumAttempts = 3;
     private const int MaxAttempts = 6;
 
     /// <inheritdoc/>
@@ -33,7 +34,7 @@ public class SearchReindexBootstrapService(
                 var indexedDocumentCount = await CountIndexedDocumentsAsync(stoppingToken);
                 await PublishReindexRequestAsync(attempt, indexedDocumentCount, stoppingToken);
 
-                if (indexedDocumentCount > 0)
+                if (attempt >= MinimumAttempts && indexedDocumentCount > 0)
                 {
                     return;
                 }
