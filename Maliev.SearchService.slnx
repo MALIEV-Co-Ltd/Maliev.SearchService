@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="Maliev.SearchService.Api/Maliev.SearchService.Api.csproj" />
+  <Project Path="Maliev.SearchService.Application/Maliev.SearchService.Application.csproj" />
+  <Project Path="Maliev.SearchService.Domain/Maliev.SearchService.Domain.csproj" />
+  <Project Path="Maliev.SearchService.Infrastructure/Maliev.SearchService.Infrastructure.csproj" />
+  <Project Path="Maliev.SearchService.Tests/Maliev.SearchService.Tests.csproj" />
+</Solution>
