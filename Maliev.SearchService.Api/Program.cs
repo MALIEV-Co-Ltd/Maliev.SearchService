@@ -1,5 +1,6 @@
 using Maliev.Aspire.ServiceDefaults;
 using Maliev.SearchService.Api.Consumers;
+using Maliev.SearchService.Api.Services;
 using Maliev.SearchService.Api.Services.Auth;
 using Maliev.SearchService.Application.Services;
 using Maliev.SearchService.Infrastructure.Persistence;
@@ -29,6 +30,7 @@ try
     builder.AddStandardCors();
     builder.AddJwtAuthentication();
     builder.Services.AddPermissionAuthorization();
+    builder.Services.AddHostedService<SearchReindexBootstrapService>();
 
     if (!builder.Environment.IsProduction())
     {
