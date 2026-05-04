@@ -82,7 +82,7 @@ public class SearchControllerTests
         var controller = CreateController(
             searchIndex,
             new Claim("permissions", "customer.customers.read"),
-            new Claim(ClaimTypes.Role, "platform.owner"));
+            new Claim(ClaimTypes.Role, "roles.platform.owner"));
 
         var result = await controller.Search("kanya", limit: 5);
 

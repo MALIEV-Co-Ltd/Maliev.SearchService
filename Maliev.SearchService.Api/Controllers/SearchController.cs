@@ -17,7 +17,7 @@ namespace Maliev.SearchService.Api.Controllers;
 /// Controller for querying and maintaining the global search index.
 /// </summary>
 [ApiController]
-[ApiVersion("1")]
+[ApiVersion("1.0")]
 [Route("search/v{version:apiVersion}/search")]
 public class SearchController(ISearchIndexService searchIndexService, IPublishEndpoint publishEndpoint) : ControllerBase
 {
@@ -147,6 +147,12 @@ public class SearchController(ISearchIndexService searchIndexService, IPublishEn
     {
         return user.Claims.Any(claim =>
             (claim.Type is "permissions" or "permission" or "roles" || claim.Type == ClaimTypes.Role) &&
-            string.Equals(claim.Value, "platform.owner", StringComparison.OrdinalIgnoreCase));
+            IsPlatformOwnerValue(claim.Value));
+    }
+
+    private static bool IsPlatformOwnerValue(string value)
+    {
+        return string.Equals(value, "platform.owner", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "roles.platform.owner", StringComparison.OrdinalIgnoreCase);
     }
 }
