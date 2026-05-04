@@ -9,12 +9,10 @@ namespace Maliev.SearchService.Api.Services;
 /// <summary>
 /// Requests source services to republish searchable documents after SearchService starts.
 /// </summary>
-/// <param name="scopeFactory">Service scope factory for reading the search index state.</param>
-/// <param name="publishEndpoint">MassTransit publish endpoint.</param>
+/// <param name="scopeFactory">Service scope factory for scoped dependencies.</param>
 /// <param name="logger">Logger instance.</param>
 public class SearchReindexBootstrapService(
     IServiceScopeFactory scopeFactory,
-    IPublishEndpoint publishEndpoint,
     ILogger<SearchReindexBootstrapService> logger) : BackgroundService
 {
     private static readonly TimeSpan InitialDelay = TimeSpan.FromSeconds(10);
@@ -65,6 +63,9 @@ public class SearchReindexBootstrapService(
     {
         var occurredAtUtc = DateTimeOffset.UtcNow;
         var command = CreateCommand(occurredAtUtc);
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var publishEndpoint = scope.ServiceProvider.GetRequiredService<IPublishEndpoint>();
+
         await publishEndpoint.Publish(command, cancellationToken);
 
         logger.LogInformation(
