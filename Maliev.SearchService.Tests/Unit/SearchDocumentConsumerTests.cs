@@ -4,7 +4,8 @@ using Maliev.SearchService.Api.Consumers;
 using Maliev.SearchService.Application.DTOs;
 using Maliev.SearchService.Application.Services;
 using MassTransit;
-using Microsoft.Extensions.Logging;
+using MassTransit.Testing;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
 namespace Maliev.SearchService.Tests.Unit;
@@ -22,20 +23,33 @@ public class SearchDocumentConsumerTests
     {
         SearchDocumentUpsertDto? capturedDocument = null;
         var searchIndex = new Mock<ISearchIndexService>();
-        searchIndex.Setup(service => service.UpsertAsync(It.IsAny<SearchDocumentUpsertDto>(), It.IsAny<CancellationToken>()))
+        searchIndex
+            .Setup(service => service.UpsertAsync(It.IsAny<SearchDocumentUpsertDto>(), It.IsAny<CancellationToken>()))
             .Callback<SearchDocumentUpsertDto, CancellationToken>((document, _) => capturedDocument = document)
             .Returns(Task.CompletedTask);
-        var consumer = new SearchDocumentUpsertedConsumer(searchIndex.Object, Mock.Of<ILogger<SearchDocumentUpsertedConsumer>>());
-        var context = new Mock<ConsumeContext<SearchDocumentUpsertedEvent>>();
-        context.SetupGet(item => item.Message).Returns(CreateUpsertEvent());
-        context.SetupGet(item => item.CancellationToken).Returns(CancellationToken.None);
 
-        await consumer.Consume(context.Object);
+        await using var provider = new ServiceCollection()
+            .AddLogging()
+            .AddMassTransitTestHarness(cfg => cfg.AddConsumer<SearchDocumentUpsertedConsumer>())
+            .AddSingleton<ISearchIndexService>(_ => searchIndex.Object)
+            .BuildServiceProvider(true);
 
-        Assert.NotNull(capturedDocument);
-        Assert.Equal("CustomerService", capturedDocument.SourceService);
-        Assert.Equal("customer", capturedDocument.ResourceType);
-        Assert.Equal("Kanya Larsson", capturedDocument.Title);
+        var harness = provider.GetRequiredService<ITestHarness>();
+        await harness.Start();
+        try
+        {
+            await harness.Bus.Publish(CreateUpsertEvent());
+
+            Assert.True(await harness.Consumed.Any<SearchDocumentUpsertedEvent>());
+            Assert.NotNull(capturedDocument);
+            Assert.Equal("CustomerService", capturedDocument.SourceService);
+            Assert.Equal("customer", capturedDocument.ResourceType);
+            Assert.Equal("Kanya Larsson", capturedDocument.Title);
+        }
+        finally
+        {
+            await harness.Stop();
+        }
     }
 
     /// <summary>
@@ -46,22 +60,36 @@ public class SearchDocumentConsumerTests
     {
         string? capturedResourceId = null;
         var searchIndex = new Mock<ISearchIndexService>();
-        searchIndex.Setup(service => service.DeleteAsync(
+        searchIndex
+            .Setup(service => service.DeleteAsync(
                 It.IsAny<string>(),
                 It.IsAny<string>(),
                 It.IsAny<string>(),
                 It.IsAny<DateTimeOffset>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<string, string, string, DateTimeOffset, CancellationToken>((_, _, resourceId, _, _) => capturedResourceId = resourceId)
+            .Callback<string, string, string, DateTimeOffset, CancellationToken>((_, _, resourceId, _, _) =>
+                capturedResourceId = resourceId)
             .Returns(Task.CompletedTask);
-        var consumer = new SearchDocumentDeletedConsumer(searchIndex.Object, Mock.Of<ILogger<SearchDocumentDeletedConsumer>>());
-        var context = new Mock<ConsumeContext<SearchDocumentDeletedEvent>>();
-        context.SetupGet(item => item.Message).Returns(CreateDeletedEvent());
-        context.SetupGet(item => item.CancellationToken).Returns(CancellationToken.None);
 
-        await consumer.Consume(context.Object);
+        await using var provider = new ServiceCollection()
+            .AddLogging()
+            .AddMassTransitTestHarness(cfg => cfg.AddConsumer<SearchDocumentDeletedConsumer>())
+            .AddSingleton<ISearchIndexService>(_ => searchIndex.Object)
+            .BuildServiceProvider(true);
 
-        Assert.Equal("customer-1", capturedResourceId);
+        var harness = provider.GetRequiredService<ITestHarness>();
+        await harness.Start();
+        try
+        {
+            await harness.Bus.Publish(CreateDeletedEvent());
+
+            Assert.True(await harness.Consumed.Any<SearchDocumentDeletedEvent>());
+            Assert.Equal("customer-1", capturedResourceId);
+        }
+        finally
+        {
+            await harness.Stop();
+        }
     }
 
     private static SearchDocumentUpsertedEvent CreateUpsertEvent()

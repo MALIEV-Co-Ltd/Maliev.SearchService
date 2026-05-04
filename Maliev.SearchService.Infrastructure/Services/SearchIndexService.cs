@@ -155,17 +155,17 @@ public class SearchIndexService(SearchDbContext dbContext, SearchPermissionEvalu
                 .ToList();
         }
 
-        var lowered = query.ToLowerInvariant();
+        // Non-Npgsql fallback (e.g. SQLite in tests). EF.Functions.Like is case-insensitive on SQLite.
+        var pattern = $"%{query}%";
         return await dbContext.SearchDocuments
             .AsNoTracking()
-            .Where(document => !document.IsDeleted)
             .Where(document => normalizedType == null || document.ResourceType == normalizedType)
             .Where(document => normalizedArea == null || document.SourceService == normalizedArea)
             .Where(document =>
-                document.Title.ToLower().Contains(lowered) ||
-                (document.Subtitle != null && document.Subtitle.ToLower().Contains(lowered)) ||
-                (document.Summary != null && document.Summary.ToLower().Contains(lowered)) ||
-                document.Keywords.ToLower().Contains(lowered))
+                EF.Functions.Like(document.Title, pattern) ||
+                (document.Subtitle != null && EF.Functions.Like(document.Subtitle, pattern)) ||
+                (document.Summary != null && EF.Functions.Like(document.Summary, pattern)) ||
+                EF.Functions.Like(document.Keywords, pattern))
             .OrderByDescending(document => document.UpdatedAtUtc)
             .Take(limit)
             .ToListAsync(ct);
