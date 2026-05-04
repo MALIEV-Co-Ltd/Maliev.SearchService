@@ -17,6 +17,25 @@ namespace Maliev.SearchService.Tests.Unit;
 public class SearchControllerTests
 {
     /// <summary>
+    /// Development configuration should not override Aspire IAM service discovery with a localhost URL.
+    /// </summary>
+    [Fact]
+    public void DevelopmentConfiguration_DoesNotOverrideIamServiceDiscovery()
+    {
+        var configPath = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..",
+            "..",
+            "Maliev.SearchService.Api",
+            "appsettings.Development.json"));
+        var source = File.ReadAllText(configPath);
+
+        Assert.DoesNotContain("localhost:5006", source, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Short queries should return an empty response without touching the index service.
     /// </summary>
     [Fact]
