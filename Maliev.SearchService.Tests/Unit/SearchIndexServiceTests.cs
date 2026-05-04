@@ -191,6 +191,50 @@ public class SearchIndexServiceTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// Older upsert events should not overwrite newer indexed document state.
+    /// </summary>
+    [Fact]
+    public async Task UpsertAsync_WithStaleEvent_DoesNotOverwriteNewerDocument()
+    {
+        await using var db = await CreateDbContextAsync();
+        var service = new SearchIndexService(db);
+        var now = DateTimeOffset.UtcNow;
+        await service.UpsertAsync(CreateDocument("customer-1", "CustomerService", "customer", "New Name", occurredAtUtc: now), CancellationToken.None);
+
+        await service.UpsertAsync(CreateDocument("customer-1", "CustomerService", "customer", "Old Name", occurredAtUtc: now.AddMinutes(-5)), CancellationToken.None);
+        var result = await service.SearchAsync(
+            new SearchQueryDto("Name", 10, null, null),
+            ["*"],
+            isPlatformOwner: false,
+            CancellationToken.None);
+
+        var row = Assert.Single(result.Results);
+        Assert.Equal("New Name", row.Title);
+    }
+
+    /// <summary>
+    /// Older delete events should not tombstone newer indexed document state.
+    /// </summary>
+    [Fact]
+    public async Task DeleteAsync_WithStaleEvent_DoesNotTombstoneNewerDocument()
+    {
+        await using var db = await CreateDbContextAsync();
+        var service = new SearchIndexService(db);
+        var now = DateTimeOffset.UtcNow;
+        await service.UpsertAsync(CreateDocument("customer-1", "CustomerService", "customer", "Kanya Larsson", occurredAtUtc: now), CancellationToken.None);
+
+        await service.DeleteAsync("CustomerService", "customer", "customer-1", now.AddMinutes(-5), CancellationToken.None);
+        var result = await service.SearchAsync(
+            new SearchQueryDto("Kanya", 10, null, null),
+            ["*"],
+            isPlatformOwner: false,
+            CancellationToken.None);
+
+        var row = Assert.Single(result.Results);
+        Assert.Equal("Kanya Larsson", row.Title);
+    }
+
+    /// <summary>
     /// PostgreSQL ILIKE fallback should match Thai customer names.
     /// </summary>
     [Fact]
@@ -251,7 +295,8 @@ public class SearchIndexServiceTests : IAsyncLifetime
         string resourceType = "project",
         string title = "Acme Project",
         string? summary = "Fixture summary",
-        IReadOnlyList<string>? keywords = null)
+        IReadOnlyList<string>? keywords = null,
+        DateTimeOffset? occurredAtUtc = null)
     {
         return new SearchDocumentUpsertDto(
             SourceService: sourceService,
@@ -263,6 +308,6 @@ public class SearchIndexServiceTests : IAsyncLifetime
             Keywords: keywords ?? [title, resourceId],
             Status: "Active",
             RequiredPermission: "project.projects.read",
-            OccurredAtUtc: DateTimeOffset.UtcNow);
+            OccurredAtUtc: occurredAtUtc ?? DateTimeOffset.UtcNow);
     }
 }

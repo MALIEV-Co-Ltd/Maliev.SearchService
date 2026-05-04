@@ -2,10 +2,12 @@ using Asp.Versioning;
 using Maliev.Aspire.ServiceDefaults.Authorization;
 using Maliev.MessagingContracts.Contracts.Search;
 using Maliev.MessagingContracts.Contracts.Shared;
+using Maliev.SearchService.Api.Models;
 using Maliev.SearchService.Application.Authorization;
 using Maliev.SearchService.Application.DTOs;
 using Maliev.SearchService.Application.Services;
 using MassTransit;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
 
@@ -15,10 +17,29 @@ namespace Maliev.SearchService.Api.Controllers;
 /// Controller for querying and maintaining the global search index.
 /// </summary>
 [ApiController]
-[ApiVersion("1.0")]
+[ApiVersion("1")]
 [Route("search/v{version:apiVersion}/search")]
 public class SearchController(ISearchIndexService searchIndexService, IPublishEndpoint publishEndpoint) : ControllerBase
 {
+    private static readonly HashSet<string> AllowedReindexSources = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CustomerService",
+        "ProjectService",
+        "QuotationService",
+        "OrderService",
+        "InvoiceService",
+        "PaymentService",
+        "ReceiptService",
+        "DeliveryService",
+        "SupplierService",
+        "ContactService",
+        "EmployeeService",
+        "FacilityService",
+        "MaterialService",
+        "InventoryService",
+        "JobService"
+    };
+
     /// <summary>
     /// Searches indexed documents visible to the current caller.
     /// </summary>
@@ -30,6 +51,8 @@ public class SearchController(ISearchIndexService searchIndexService, IPublishEn
     /// <returns>Search results visible to the caller.</returns>
     [HttpGet]
     [RequirePermission(SearchPermissions.DocumentsRead)]
+    [ProducesResponseType(typeof(SearchResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<SearchResponseDto>> Search(
         [FromQuery] string? query,
         [FromQuery] int limit = 10,
@@ -44,7 +67,13 @@ public class SearchController(ISearchIndexService searchIndexService, IPublishEn
 
         if (query.Trim().Length > 120)
         {
-            return BadRequest("Search query must be 120 characters or fewer.");
+            return BadRequest(new ErrorResponse
+            {
+                Code = "QUERY_TOO_LONG",
+                Message = "Search query must be 120 characters or fewer.",
+                TraceId = HttpContext.TraceIdentifier,
+                Timestamp = DateTime.UtcNow
+            });
         }
 
         var response = await searchIndexService.SearchAsync(
@@ -64,8 +93,22 @@ public class SearchController(ISearchIndexService searchIndexService, IPublishEn
     /// <returns>Accepted when the command is published.</returns>
     [HttpPost("reindex")]
     [RequirePermission(SearchPermissions.DocumentsReindex)]
+    [ProducesResponseType(StatusCodes.Status202Accepted)]
+    [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> RequestReindex([FromQuery] string? sourceService = null, CancellationToken ct = default)
     {
+        sourceService = NormalizeOptional(sourceService);
+        if (sourceService is not null && !AllowedReindexSources.Contains(sourceService))
+        {
+            return BadRequest(new ErrorResponse
+            {
+                Code = "INVALID_SOURCE_SERVICE",
+                Message = "The requested source service is not eligible for search reindexing.",
+                TraceId = HttpContext.TraceIdentifier,
+                Timestamp = DateTime.UtcNow
+            });
+        }
+
         var now = DateTimeOffset.UtcNow;
         await publishEndpoint.Publish(new SearchReindexRequestedCommand(
             MessageId: Guid.NewGuid(),
@@ -84,6 +127,11 @@ public class SearchController(ISearchIndexService searchIndexService, IPublishEn
                 RequestedAtUtc: now)), ct);
 
         return Accepted();
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 
     private static IReadOnlyCollection<string> GetPermissionClaims(ClaimsPrincipal user)

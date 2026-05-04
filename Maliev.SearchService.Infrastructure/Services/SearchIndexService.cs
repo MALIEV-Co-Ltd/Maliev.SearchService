@@ -4,25 +4,32 @@ using Maliev.SearchService.Application.Services;
 using Maliev.SearchService.Domain.Entities;
 using Maliev.SearchService.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Maliev.SearchService.Infrastructure.Services;
 
 /// <summary>
 /// EF Core implementation of the global search index.
 /// </summary>
-public class SearchIndexService(SearchDbContext dbContext) : ISearchIndexService
+public class SearchIndexService(SearchDbContext dbContext, SearchPermissionEvaluator? permissionEvaluator = null) : ISearchIndexService
 {
-    private readonly SearchPermissionEvaluator _permissionEvaluator = new();
+    private readonly SearchPermissionEvaluator _permissionEvaluator = permissionEvaluator ?? new();
 
     /// <inheritdoc/>
     public async Task UpsertAsync(SearchDocumentUpsertDto document, CancellationToken ct)
     {
         var existing = await dbContext.SearchDocuments
+            .IgnoreQueryFilters()
             .FirstOrDefaultAsync(d =>
                 d.SourceService == document.SourceService &&
                 d.ResourceType == document.ResourceType &&
                 d.ResourceId == document.ResourceId,
                 ct);
+
+        if (existing is not null && document.OccurredAtUtc <= existing.UpdatedAtUtc)
+        {
+            return; // Stale or duplicate event — skip
+        }
 
         if (existing is null)
         {
@@ -36,22 +43,36 @@ public class SearchIndexService(SearchDbContext dbContext) : ISearchIndexService
             dbContext.SearchDocuments.Add(existing);
         }
 
-        existing.Title = document.Title.Trim();
-        existing.Subtitle = NormalizeOptional(document.Subtitle);
-        existing.Summary = NormalizeOptional(document.Summary);
-        existing.Keywords = string.Join(' ', document.Keywords.Where(k => !string.IsNullOrWhiteSpace(k)).Select(k => k.Trim()));
-        existing.Status = NormalizeOptional(document.Status);
-        existing.RequiredPermission = document.RequiredPermission.Trim();
-        existing.UpdatedAtUtc = document.OccurredAtUtc;
-        existing.IsDeleted = false;
+        ApplyFields(existing, document);
 
-        await dbContext.SaveChangesAsync(ct);
+        try
+        {
+            await dbContext.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
+        {
+            // Concurrent insert race: another instance beat us to the row; reload and update
+            dbContext.ChangeTracker.Clear();
+            var conflict = await dbContext.SearchDocuments
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(d =>
+                    d.SourceService == document.SourceService &&
+                    d.ResourceType == document.ResourceType &&
+                    d.ResourceId == document.ResourceId, ct);
+
+            if (conflict is not null && document.OccurredAtUtc > conflict.UpdatedAtUtc)
+            {
+                ApplyFields(conflict, document);
+                await dbContext.SaveChangesAsync(ct);
+            }
+        }
     }
 
     /// <inheritdoc/>
     public async Task DeleteAsync(string sourceService, string resourceType, string resourceId, DateTimeOffset occurredAtUtc, CancellationToken ct)
     {
         var existing = await dbContext.SearchDocuments
+            .IgnoreQueryFilters()
             .FirstOrDefaultAsync(d =>
                 d.SourceService == sourceService &&
                 d.ResourceType == resourceType &&
@@ -59,6 +80,11 @@ public class SearchIndexService(SearchDbContext dbContext) : ISearchIndexService
                 ct);
 
         if (existing is null)
+        {
+            return;
+        }
+
+        if (occurredAtUtc <= existing.UpdatedAtUtc)
         {
             return;
         }
@@ -105,7 +131,7 @@ public class SearchIndexService(SearchDbContext dbContext) : ISearchIndexService
         {
             var documents = await dbContext.SearchDocuments
                 .FromSqlInterpolated($"""
-                    SELECT *
+                    SELECT *, xmin
                     FROM search_documents
                     WHERE is_deleted = false
                       AND (
@@ -194,5 +220,24 @@ public class SearchIndexService(SearchDbContext dbContext) : ISearchIndexService
     private static string? NormalizeOptional(string? value)
     {
         return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private static void ApplyFields(SearchDocument existing, SearchDocumentUpsertDto document)
+    {
+        existing.Title = document.Title.Trim();
+        existing.Subtitle = NormalizeOptional(document.Subtitle);
+        existing.Summary = NormalizeOptional(document.Summary);
+        existing.Keywords = string.Join(' ', document.Keywords
+            .Where(keyword => !string.IsNullOrWhiteSpace(keyword))
+            .Select(keyword => keyword.Trim()));
+        existing.Status = NormalizeOptional(document.Status);
+        existing.RequiredPermission = document.RequiredPermission.Trim();
+        existing.UpdatedAtUtc = document.OccurredAtUtc;
+        existing.IsDeleted = false;
+    }
+
+    private static bool IsUniqueConstraintViolation(DbUpdateException exception)
+    {
+        return exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation };
     }
 }

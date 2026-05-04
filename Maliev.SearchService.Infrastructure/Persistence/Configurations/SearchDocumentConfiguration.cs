@@ -29,11 +29,14 @@ public class SearchDocumentConfiguration : IEntityTypeConfiguration<SearchDocume
         builder.Property(document => document.CreatedAtUtc).HasColumnName("created_at_utc");
         builder.Property(document => document.UpdatedAtUtc).HasColumnName("updated_at_utc");
 
+        // xmin is a PostgreSQL system column — shadow property only, no entity property, no migration column
+        builder.Property<uint>("xmin").HasColumnType("xid").IsRowVersion();
+
         builder.HasIndex(document => new { document.SourceService, document.ResourceType, document.ResourceId })
             .IsUnique()
             .HasDatabaseName("ux_search_documents_source_resource");
         builder.HasIndex(document => document.ResourceType).HasDatabaseName("ix_search_documents_resource_type");
         builder.HasIndex(document => document.SourceService).HasDatabaseName("ix_search_documents_source_service");
-        builder.HasIndex(document => document.IsDeleted).HasDatabaseName("ix_search_documents_is_deleted");
+        // Boolean index removed — low selectivity and redundant with the global query filter
     }
 }

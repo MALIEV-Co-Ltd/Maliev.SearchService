@@ -25,7 +25,7 @@ public class SearchReindexBootstrapService(
     {
         try
         {
-            await Task.Delay(InitialDelay, stoppingToken);
+            await Task.Delay(InitialDelay + RandomJitter(), stoppingToken);
 
             for (var attempt = 1; attempt <= MaxAttempts && !stoppingToken.IsCancellationRequested; attempt++)
             {
@@ -37,7 +37,7 @@ public class SearchReindexBootstrapService(
                     return;
                 }
 
-                await Task.Delay(RetryDelay, stoppingToken);
+                await Task.Delay(RetryDelay + RandomJitter(), stoppingToken);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -46,7 +46,7 @@ public class SearchReindexBootstrapService(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Search reindex bootstrap request failed.");
+            logger.LogError(ex, "Search reindex bootstrap request failed.");
         }
     }
 
@@ -97,5 +97,10 @@ public class SearchReindexBootstrapService(
                 SourceService: null,
                 RequestedBy: "search-index-bootstrap",
                 RequestedAtUtc: occurredAtUtc));
+    }
+
+    private static TimeSpan RandomJitter()
+    {
+        return TimeSpan.FromSeconds(Random.Shared.Next(0, 5));
     }
 }

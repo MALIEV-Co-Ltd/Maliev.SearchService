@@ -11,8 +11,11 @@ public class SearchDbContextFactory : IDesignTimeDbContextFactory<SearchDbContex
     /// <inheritdoc/>
     public SearchDbContext CreateDbContext(string[] args)
     {
+        var connectionString = Environment.GetEnvironmentVariable("ConnectionStrings__SearchDbContext")
+            ?? "Host=localhost;Database=search_app_db;Username=postgres";
+
         var options = new DbContextOptionsBuilder<SearchDbContext>()
-            .UseNpgsql("Host=localhost;Database=search_app_db;Username=postgres;Password=password")
+            .UseNpgsql(connectionString)
             .Options;
 
         return new SearchDbContext(options);

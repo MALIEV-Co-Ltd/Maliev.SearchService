@@ -25,7 +25,8 @@ public class SearchDbContext : DbContext
     /// <inheritdoc/>
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        modelBuilder.ApplyConfiguration(new SearchDocumentConfiguration());
         base.OnModelCreating(modelBuilder);
+        modelBuilder.ApplyConfiguration(new SearchDocumentConfiguration());
+        modelBuilder.Entity<SearchDocument>().HasQueryFilter(d => !d.IsDeleted);
     }
 }

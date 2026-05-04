@@ -92,10 +92,12 @@ namespace Maliev.SearchService.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at_utc");
 
-                    b.HasKey("Id");
+                    b.Property<uint>("xmin")
+                        .IsConcurrencyToken()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
-                    b.HasIndex("IsDeleted")
-                        .HasDatabaseName("ix_search_documents_is_deleted");
+                    b.HasKey("Id");
 
                     b.HasIndex("ResourceType")
                         .HasDatabaseName("ix_search_documents_resource_type");

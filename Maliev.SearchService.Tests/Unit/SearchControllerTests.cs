@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Maliev.MessagingContracts.Contracts.Search;
 using Maliev.SearchService.Api.Controllers;
+using Maliev.SearchService.Api.Models;
 using Maliev.SearchService.Application.DTOs;
 using Maliev.SearchService.Application.Services;
 using MassTransit;
@@ -73,6 +74,22 @@ public class SearchControllerTests
     }
 
     /// <summary>
+    /// Long search queries should return the standard error response shape.
+    /// </summary>
+    [Fact]
+    public async Task Search_QueryAboveMaximum_ReturnsTypedErrorResponse()
+    {
+        var controller = CreateController(new Mock<ISearchIndexService>());
+
+        var result = await controller.Search(new string('a', 121));
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result.Result);
+        var response = Assert.IsType<ErrorResponse>(badRequest.Value);
+        Assert.Equal("QUERY_TOO_LONG", response.Code);
+        Assert.False(string.IsNullOrWhiteSpace(response.TraceId));
+    }
+
+    /// <summary>
     /// Reindex endpoint should publish a source-scoped command when requested.
     /// </summary>
     [Fact]
@@ -93,6 +110,48 @@ public class SearchControllerTests
         Assert.NotNull(published);
         Assert.Equal("CustomerService", published.Payload.SourceService);
         Assert.Equal("CustomerService", Assert.Single(published.ConsumedBy));
+    }
+
+    /// <summary>
+    /// Global reindex requests should publish to all eligible producers.
+    /// </summary>
+    [Fact]
+    public async Task RequestReindex_WithoutSourceService_PublishesGlobalCommand()
+    {
+        SearchReindexRequestedCommand? published = null;
+        var publishEndpoint = new Mock<IPublishEndpoint>();
+        publishEndpoint.Setup(endpoint => endpoint.Publish(
+                It.IsAny<SearchReindexRequestedCommand>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<SearchReindexRequestedCommand, CancellationToken>((message, _) => published = message)
+            .Returns(Task.CompletedTask);
+        var controller = CreateController(new Mock<ISearchIndexService>(), publishEndpoint);
+
+        var result = await controller.RequestReindex();
+
+        Assert.IsType<AcceptedResult>(result);
+        Assert.NotNull(published);
+        Assert.Null(published.Payload.SourceService);
+        Assert.Equal("*", Assert.Single(published.ConsumedBy));
+    }
+
+    /// <summary>
+    /// Reindex requests should reject unknown source services instead of publishing arbitrary consumer names.
+    /// </summary>
+    [Fact]
+    public async Task RequestReindex_WithUnknownSourceService_ReturnsTypedErrorResponse()
+    {
+        var publishEndpoint = new Mock<IPublishEndpoint>();
+        var controller = CreateController(new Mock<ISearchIndexService>(), publishEndpoint);
+
+        var result = await controller.RequestReindex("UnknownService");
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+        var response = Assert.IsType<ErrorResponse>(badRequest.Value);
+        Assert.Equal("INVALID_SOURCE_SERVICE", response.Code);
+        publishEndpoint.Verify(endpoint => endpoint.Publish(
+            It.IsAny<SearchReindexRequestedCommand>(),
+            It.IsAny<CancellationToken>()), Times.Never);
     }
 
     private static SearchController CreateController(
