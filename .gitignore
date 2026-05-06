@@ -6,5 +6,8 @@ TestResults/
 coverage/
 artifacts/
 *.user
+*.csproj.user
+*.rsuser
+*.DotSettings.user
 *.suo
 *.nupkg
