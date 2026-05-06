@@ -13,57 +13,47 @@ namespace Maliev.SearchService.Infrastructure.Services;
 /// </summary>
 public class SearchIndexService(SearchDbContext dbContext, SearchPermissionEvaluator? permissionEvaluator = null) : ISearchIndexService
 {
+    private const int MaxSaveAttempts = 3;
     private readonly SearchPermissionEvaluator _permissionEvaluator = permissionEvaluator ?? new();
 
     /// <inheritdoc/>
     public async Task UpsertAsync(SearchDocumentUpsertDto document, CancellationToken ct)
     {
-        var existing = await dbContext.SearchDocuments
-            .IgnoreQueryFilters()
-            .FirstOrDefaultAsync(d =>
-                d.SourceService == document.SourceService &&
-                d.ResourceType == document.ResourceType &&
-                d.ResourceId == document.ResourceId,
-                ct);
-
-        if (existing is not null && document.OccurredAtUtc <= existing.UpdatedAtUtc)
+        for (var attempt = 1; attempt <= MaxSaveAttempts; attempt++)
         {
-            return; // Stale or duplicate event — skip
-        }
+            var existing = await LoadDocumentAsync(document.SourceService, document.ResourceType, document.ResourceId, ct);
 
-        if (existing is null)
-        {
-            existing = new SearchDocument
+            if (existing is not null && document.OccurredAtUtc <= existing.UpdatedAtUtc)
             {
-                SourceService = document.SourceService,
-                ResourceType = document.ResourceType,
-                ResourceId = document.ResourceId,
-                CreatedAtUtc = document.OccurredAtUtc
-            };
-            dbContext.SearchDocuments.Add(existing);
-        }
+                return; // Stale or duplicate event — skip
+            }
 
-        ApplyFields(existing, document);
-
-        try
-        {
-            await dbContext.SaveChangesAsync(ct);
-        }
-        catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
-        {
-            // Concurrent insert race: another instance beat us to the row; reload and update
-            dbContext.ChangeTracker.Clear();
-            var conflict = await dbContext.SearchDocuments
-                .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(d =>
-                    d.SourceService == document.SourceService &&
-                    d.ResourceType == document.ResourceType &&
-                    d.ResourceId == document.ResourceId, ct);
-
-            if (conflict is not null && document.OccurredAtUtc > conflict.UpdatedAtUtc)
+            if (existing is null)
             {
-                ApplyFields(conflict, document);
+                existing = new SearchDocument
+                {
+                    SourceService = document.SourceService,
+                    ResourceType = document.ResourceType,
+                    ResourceId = document.ResourceId,
+                    CreatedAtUtc = document.OccurredAtUtc
+                };
+                dbContext.SearchDocuments.Add(existing);
+            }
+
+            ApplyFields(existing, document);
+
+            try
+            {
                 await dbContext.SaveChangesAsync(ct);
+                return;
+            }
+            catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex) && attempt < MaxSaveAttempts)
+            {
+                dbContext.ChangeTracker.Clear();
+            }
+            catch (DbUpdateConcurrencyException) when (attempt < MaxSaveAttempts)
+            {
+                dbContext.ChangeTracker.Clear();
             }
         }
     }
@@ -71,27 +61,33 @@ public class SearchIndexService(SearchDbContext dbContext, SearchPermissionEvalu
     /// <inheritdoc/>
     public async Task DeleteAsync(string sourceService, string resourceType, string resourceId, DateTimeOffset occurredAtUtc, CancellationToken ct)
     {
-        var existing = await dbContext.SearchDocuments
-            .IgnoreQueryFilters()
-            .FirstOrDefaultAsync(d =>
-                d.SourceService == sourceService &&
-                d.ResourceType == resourceType &&
-                d.ResourceId == resourceId,
-                ct);
-
-        if (existing is null)
+        for (var attempt = 1; attempt <= MaxSaveAttempts; attempt++)
         {
-            return;
-        }
+            var existing = await LoadDocumentAsync(sourceService, resourceType, resourceId, ct);
 
-        if (occurredAtUtc <= existing.UpdatedAtUtc)
-        {
-            return;
-        }
+            if (existing is null)
+            {
+                return;
+            }
 
-        existing.IsDeleted = true;
-        existing.UpdatedAtUtc = occurredAtUtc;
-        await dbContext.SaveChangesAsync(ct);
+            if (occurredAtUtc <= existing.UpdatedAtUtc)
+            {
+                return;
+            }
+
+            existing.IsDeleted = true;
+            existing.UpdatedAtUtc = occurredAtUtc;
+
+            try
+            {
+                await dbContext.SaveChangesAsync(ct);
+                return;
+            }
+            catch (DbUpdateConcurrencyException) when (attempt < MaxSaveAttempts)
+            {
+                dbContext.ChangeTracker.Clear();
+            }
+        }
     }
 
     /// <inheritdoc/>
@@ -169,6 +165,17 @@ public class SearchIndexService(SearchDbContext dbContext, SearchPermissionEvalu
             .OrderByDescending(document => document.UpdatedAtUtc)
             .Take(limit)
             .ToListAsync(ct);
+    }
+
+    private async Task<SearchDocument?> LoadDocumentAsync(string sourceService, string resourceType, string resourceId, CancellationToken ct)
+    {
+        return await dbContext.SearchDocuments
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(d =>
+                d.SourceService == sourceService &&
+                d.ResourceType == resourceType &&
+                d.ResourceId == resourceId,
+                ct);
     }
 
     private static SearchResultDto ToResult(SearchDocument document, string query)

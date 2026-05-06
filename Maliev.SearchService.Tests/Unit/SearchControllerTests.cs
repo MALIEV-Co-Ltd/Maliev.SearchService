@@ -22,14 +22,7 @@ public class SearchControllerTests
     [Fact]
     public void DevelopmentConfiguration_DoesNotOverrideIamServiceDiscovery()
     {
-        var configPath = Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory,
-            "..",
-            "..",
-            "..",
-            "..",
-            "Maliev.SearchService.Api",
-            "appsettings.Development.json"));
+        var configPath = FindServiceFile("Maliev.SearchService.Api", "appsettings.Development.json");
         var source = File.ReadAllText(configPath);
 
         Assert.DoesNotContain("localhost:5006", source, StringComparison.OrdinalIgnoreCase);
@@ -196,5 +189,25 @@ public class SearchControllerTests
             }
         };
         return controller;
+    }
+
+    private static string FindServiceFile(string projectDirectoryName, string fileName)
+    {
+        foreach (var startPath in new[] { AppContext.BaseDirectory, Directory.GetCurrentDirectory() })
+        {
+            var directory = new DirectoryInfo(startPath);
+            while (directory is not null)
+            {
+                var candidate = Path.Combine(directory.FullName, projectDirectoryName, fileName);
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+
+                directory = directory.Parent;
+            }
+        }
+
+        throw new DirectoryNotFoundException($"Could not find {projectDirectoryName}/{fileName}.");
     }
 }

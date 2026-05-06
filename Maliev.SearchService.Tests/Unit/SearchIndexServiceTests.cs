@@ -2,6 +2,7 @@ using Maliev.SearchService.Application.DTOs;
 using Maliev.SearchService.Infrastructure.Persistence;
 using Maliev.SearchService.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Testcontainers.PostgreSql;
 
 namespace Maliev.SearchService.Tests.Unit;
@@ -213,6 +214,36 @@ public class SearchIndexServiceTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// Concurrent updates should be retried against the latest row instead of failing the consumer.
+    /// </summary>
+    [Fact]
+    public async Task UpsertAsync_WithConcurrentUpdate_ReloadsAndAppliesNewestEvent()
+    {
+        await using var seedDb = await CreateDbContextAsync();
+        var seedService = new SearchIndexService(seedDb);
+        var now = DateTimeOffset.UtcNow;
+        var winningOccurredAt = now.AddMinutes(10);
+        await seedService.UpsertAsync(CreateDocument("customer-1", "CustomerService", "customer", "Original Name", occurredAtUtc: now), CancellationToken.None);
+
+        await using var db = await CreateDbContextAsync(
+            false,
+            new ConcurrentSearchDocumentUpdateInterceptor(
+                _postgres.GetConnectionString(),
+                "CustomerService",
+                "customer",
+                "customer-1",
+                now.AddMinutes(5)));
+        var service = new SearchIndexService(db);
+
+        await service.UpsertAsync(CreateDocument("customer-1", "CustomerService", "customer", "Consumer Winner", occurredAtUtc: winningOccurredAt), CancellationToken.None);
+
+        await using var verifyDb = await CreateDbContextAsync(clearDocuments: false);
+        var document = await verifyDb.SearchDocuments.SingleAsync(document => document.ResourceId == "customer-1");
+        Assert.Equal("Consumer Winner", document.Title);
+        Assert.Equal(winningOccurredAt.ToUnixTimeMilliseconds(), document.UpdatedAtUtc.ToUnixTimeMilliseconds());
+    }
+
+    /// <summary>
     /// Older delete events should not tombstone newer indexed document state.
     /// </summary>
     [Fact]
@@ -278,14 +309,23 @@ public class SearchIndexServiceTests : IAsyncLifetime
         Assert.Equal([100d, 75d, 60d, 50d, 35d], result.Results.Select(row => row.Score));
     }
 
-    private async Task<SearchDbContext> CreateDbContextAsync()
+    private async Task<SearchDbContext> CreateDbContextAsync(bool clearDocuments = true, params IInterceptor[] interceptors)
     {
-        var options = new DbContextOptionsBuilder<SearchDbContext>()
-            .UseNpgsql(_postgres.GetConnectionString())
-            .Options;
+        var builder = new DbContextOptionsBuilder<SearchDbContext>()
+            .UseNpgsql(_postgres.GetConnectionString());
+        if (interceptors.Length > 0)
+        {
+            builder.AddInterceptors(interceptors);
+        }
+
+        var options = builder.Options;
         var db = new SearchDbContext(options);
         await db.Database.EnsureCreatedAsync();
-        await db.SearchDocuments.ExecuteDeleteAsync();
+        if (clearDocuments)
+        {
+            await db.SearchDocuments.ExecuteDeleteAsync();
+        }
+
         return db;
     }
 
@@ -309,5 +349,41 @@ public class SearchIndexServiceTests : IAsyncLifetime
             Status: "Active",
             RequiredPermission: "project.projects.read",
             OccurredAtUtc: occurredAtUtc ?? DateTimeOffset.UtcNow);
+    }
+
+    private sealed class ConcurrentSearchDocumentUpdateInterceptor(
+        string connectionString,
+        string sourceService,
+        string resourceType,
+        string resourceId,
+        DateTimeOffset occurredAtUtc) : SaveChangesInterceptor
+    {
+        private int _hasUpdated;
+
+        public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Exchange(ref _hasUpdated, 1) == 0)
+            {
+                var options = new DbContextOptionsBuilder<SearchDbContext>()
+                    .UseNpgsql(connectionString)
+                    .Options;
+                await using var competingDb = new SearchDbContext(options);
+                var document = await competingDb.SearchDocuments
+                    .IgnoreQueryFilters()
+                    .SingleAsync(document =>
+                        document.SourceService == sourceService &&
+                        document.ResourceType == resourceType &&
+                        document.ResourceId == resourceId,
+                        cancellationToken);
+                document.Title = "Concurrent Update";
+                document.UpdatedAtUtc = occurredAtUtc;
+                await competingDb.SaveChangesAsync(cancellationToken);
+            }
+
+            return result;
+        }
     }
 }
