@@ -19,6 +19,12 @@ public class SearchIndexService(SearchDbContext dbContext, SearchPermissionEvalu
     /// <inheritdoc/>
     public async Task UpsertAsync(SearchDocumentUpsertDto document, CancellationToken ct)
     {
+        if (dbContext.Database.IsNpgsql())
+        {
+            await UpsertPostgresAsync(document, ct);
+            return;
+        }
+
         for (var attempt = 1; attempt <= MaxSaveAttempts; attempt++)
         {
             var existing = await LoadDocumentAsync(document.SourceService, document.ResourceType, document.ResourceId, ct);
@@ -56,6 +62,62 @@ public class SearchIndexService(SearchDbContext dbContext, SearchPermissionEvalu
                 dbContext.ChangeTracker.Clear();
             }
         }
+    }
+
+    private async Task UpsertPostgresAsync(SearchDocumentUpsertDto document, CancellationToken ct)
+    {
+        var title = document.Title.Trim();
+        var subtitle = NormalizeOptional(document.Subtitle);
+        var summary = NormalizeOptional(document.Summary);
+        var keywords = string.Join(' ', document.Keywords
+            .Where(keyword => !string.IsNullOrWhiteSpace(keyword))
+            .Select(keyword => keyword.Trim()));
+        var status = NormalizeOptional(document.Status);
+        var requiredPermission = document.RequiredPermission.Trim();
+
+        await dbContext.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO search_documents (
+                id,
+                source_service,
+                resource_type,
+                resource_id,
+                title,
+                subtitle,
+                summary,
+                keywords,
+                status,
+                required_permission,
+                is_deleted,
+                created_at_utc,
+                updated_at_utc
+            )
+            VALUES (
+                {Guid.NewGuid()},
+                {document.SourceService},
+                {document.ResourceType},
+                {document.ResourceId},
+                {title},
+                {subtitle},
+                {summary},
+                {keywords},
+                {status},
+                {requiredPermission},
+                false,
+                {document.OccurredAtUtc},
+                {document.OccurredAtUtc}
+            )
+            ON CONFLICT (source_service, resource_type, resource_id)
+            DO UPDATE SET
+                title = EXCLUDED.title,
+                subtitle = EXCLUDED.subtitle,
+                summary = EXCLUDED.summary,
+                keywords = EXCLUDED.keywords,
+                status = EXCLUDED.status,
+                required_permission = EXCLUDED.required_permission,
+                is_deleted = false,
+                updated_at_utc = EXCLUDED.updated_at_utc
+            WHERE search_documents.updated_at_utc < EXCLUDED.updated_at_utc;
+            """, ct);
     }
 
     /// <inheritdoc/>
