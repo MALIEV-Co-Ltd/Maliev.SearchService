@@ -5,6 +5,7 @@ using Maliev.SearchService.Api.Services.Auth;
 using Maliev.SearchService.Application.Services;
 using Maliev.SearchService.Infrastructure.Persistence;
 using Maliev.SearchService.Infrastructure.Services;
+using MassTransit;
 using Microsoft.EntityFrameworkCore;
 
 using var loggerFactory = LoggerFactory.Create(logging => logging.AddConsole());
@@ -26,7 +27,7 @@ try
     builder.AddStandardCache("search:");
     builder.AddMassTransitWithRabbitMq(configurator =>
     {
-        configurator.AddConsumer<SearchDocumentUpsertedConsumer>();
+        configurator.AddConsumer<SearchDocumentUpsertedConsumer, SearchDocumentUpsertedConsumerDefinition>();
         configurator.AddConsumer<SearchDocumentDeletedConsumer>();
     });
     builder.AddPostgresDbContext<SearchDbContext>(connectionName: "SearchDbContext");
