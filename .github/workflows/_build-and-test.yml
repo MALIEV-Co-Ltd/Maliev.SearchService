@@ -71,3 +71,6 @@ jobs:
       - name: Audit resolved NuGet graph
         run: dotnet list ${{ inputs.solution_file }} package --include-transitive --vulnerable --no-restore
         working-directory: service
+        env:
+          NUGET_USERNAME: ${{ github.actor }}
+          NUGET_PASSWORD: ${{ secrets.gitops_pat }}

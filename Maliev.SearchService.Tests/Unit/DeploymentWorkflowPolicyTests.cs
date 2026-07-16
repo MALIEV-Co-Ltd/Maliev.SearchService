@@ -174,6 +174,19 @@ public sealed class DeploymentWorkflowPolicyTests
     }
 
     /// <summary>
+    /// The vulnerability audit must authenticate to the private package source just like restore.
+    /// </summary>
+    [Fact]
+    public void BuildWorkflow_AuthenticatesPrivateFeedDuringVulnerabilityAudit()
+    {
+        var source = ReadWorkflow("_build-and-test.yml");
+        var auditStep = source[source.IndexOf("- name: Audit resolved NuGet graph", StringComparison.Ordinal)..];
+
+        Assert.Contains("NUGET_USERNAME: ${{ github.actor }}", auditStep, StringComparison.Ordinal);
+        Assert.Contains("NUGET_PASSWORD: ${{ secrets.gitops_pat }}", auditStep, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The production Docker build must restore exact platform dependencies without local sibling projects.
     /// </summary>
     [Fact]
