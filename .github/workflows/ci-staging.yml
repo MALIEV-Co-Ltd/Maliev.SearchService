@@ -19,7 +19,7 @@ jobs:
     environment: staging
     permissions:
       contents: read
-      attestations: read
+      attestations: write
       id-token: write
     env:
       SOURCE_IMAGE: asia-southeast1-docker.pkg.dev/maliev-website/maliev-website-artifact-dev/maliev-search-service
@@ -68,7 +68,11 @@ jobs:
           set -euo pipefail
           source_digest="$(gcloud artifacts docker images describe "$SOURCE_IMAGE:$SOURCE_TAG" --format='value(image_summary.digest)')"
           [[ "$source_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          gh attestation verify "oci://$SOURCE_IMAGE@$source_digest" --repo "$GITHUB_REPOSITORY"
+          gh attestation verify "oci://$SOURCE_IMAGE@$source_digest" \
+            --repo "$GITHUB_REPOSITORY" \
+            --source-digest "$GITHUB_SHA" \
+            --source-ref refs/heads/develop \
+            --signer-workflow "github.com/MALIEV-Co-Ltd/Maliev.SearchService/.github/workflows/ci-develop.yml"
           echo "source_digest=$source_digest" >> "$GITHUB_OUTPUT"
 
       - name: Promote exact digest without rebuilding
@@ -86,6 +90,13 @@ jobs:
           promoted_digest="$(gcloud artifacts docker images describe "$TARGET_IMAGE:$RELEASE_VERSION" --format='value(image_summary.digest)')"
           test "$promoted_digest" = "$SOURCE_DIGEST"
           echo "promoted_digest=$promoted_digest" >> "$GITHUB_OUTPUT"
+
+      - name: Attest approved staging release identity
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4
+        with:
+          subject-name: ${{ env.TARGET_IMAGE }}
+          subject-digest: ${{ steps.promotion.outputs.promoted_digest }}
+          push-to-registry: true
 
       - name: Checkout GitOps evidence repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

@@ -56,7 +56,15 @@ jobs:
             release_version="${release_tags[0]#release/v}"
           fi
           [[ "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]
+          release_ref="refs/tags/release/v$release_version"
+          release_sha="$(git rev-parse "$release_ref^{commit}")"
+          git merge-base --is-ancestor "$release_sha" origin/main
+          if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]; then
+            test "$release_sha" = "$GITHUB_SHA"
+          fi
           echo "release_version=$release_version" >> "$GITHUB_OUTPUT"
+          echo "release_ref=$release_ref" >> "$GITHUB_OUTPUT"
+          echo "release_sha=$release_sha" >> "$GITHUB_OUTPUT"
 
       - name: Authenticate to Google Cloud with WIF
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
@@ -82,11 +90,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
+          RELEASE_REF: ${{ steps.release.outputs.release_ref }}
+          RELEASE_SHA: ${{ steps.release.outputs.release_sha }}
         run: |
           set -euo pipefail
           source_digest="$(gcloud artifacts docker images describe "$SOURCE_IMAGE:$RELEASE_VERSION" --format='value(image_summary.digest)')"
           [[ "$source_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          gh attestation verify "oci://$DEV_IMAGE@$source_digest" --repo "$GITHUB_REPOSITORY"
+          gh attestation verify "oci://$DEV_IMAGE@$source_digest" \
+            --repo "$GITHUB_REPOSITORY" \
+            --source-digest "$RELEASE_SHA" \
+            --source-ref refs/heads/develop \
+            --signer-workflow "github.com/MALIEV-Co-Ltd/Maliev.SearchService/.github/workflows/ci-develop.yml"
+          gh attestation verify "oci://$SOURCE_IMAGE@$source_digest" \
+            --repo "$GITHUB_REPOSITORY" \
+            --source-digest "$RELEASE_SHA" \
+            --source-ref "$RELEASE_REF" \
+            --signer-workflow "github.com/MALIEV-Co-Ltd/Maliev.SearchService/.github/workflows/ci-staging.yml"
           echo "source_digest=$source_digest" >> "$GITHUB_OUTPUT"
 
       - name: Promote exact digest without rebuilding

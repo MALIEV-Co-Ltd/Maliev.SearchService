@@ -69,7 +69,8 @@ jobs:
         working-directory: service
 
       - name: Audit resolved NuGet graph
-        run: dotnet list ${{ inputs.solution_file }} package --include-transitive --vulnerable --no-restore
+        shell: pwsh
+        run: ./.github/scripts/Assert-NoVulnerablePackages.ps1 -SolutionFile "${{ inputs.solution_file }}"
         working-directory: service
         env:
           NUGET_USERNAME: ${{ github.actor }}

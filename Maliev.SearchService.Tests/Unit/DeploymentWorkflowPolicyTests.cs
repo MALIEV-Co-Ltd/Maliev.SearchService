@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 
 namespace Maliev.SearchService.Tests.Unit;
@@ -65,6 +66,13 @@ public sealed class DeploymentWorkflowPolicyTests
         Assert.Contains("tags: [\"release/v*\"]", source, StringComparison.Ordinal);
         Assert.Contains("environment: staging", source, StringComparison.Ordinal);
         Assert.Contains("gh attestation verify", source, StringComparison.Ordinal);
+        Assert.Contains("--source-digest \"$GITHUB_SHA\"", source, StringComparison.Ordinal);
+        Assert.Contains("--source-ref refs/heads/develop", source, StringComparison.Ordinal);
+        Assert.Contains(
+            "github.com/MALIEV-Co-Ltd/Maliev.SearchService/.github/workflows/ci-develop.yml",
+            source,
+            StringComparison.Ordinal);
+        Assert.Contains("name: Attest approved staging release identity", source, StringComparison.Ordinal);
         Assert.Contains("docker buildx imagetools create", source, StringComparison.Ordinal);
         Assert.Contains("--prefer-index=false", source, StringComparison.Ordinal);
         Assert.Contains("source_digest", source, StringComparison.OrdinalIgnoreCase);
@@ -85,6 +93,18 @@ public sealed class DeploymentWorkflowPolicyTests
         Assert.Contains("environment: production", source, StringComparison.Ordinal);
         Assert.Contains("release/v*", source, StringComparison.Ordinal);
         Assert.Contains("gh attestation verify", source, StringComparison.Ordinal);
+        Assert.Contains("release_ref=\"refs/tags/release/v$release_version\"", source, StringComparison.Ordinal);
+        Assert.Contains("release_sha", source, StringComparison.Ordinal);
+        Assert.Contains("--source-ref refs/heads/develop", source, StringComparison.Ordinal);
+        Assert.Contains(
+            "github.com/MALIEV-Co-Ltd/Maliev.SearchService/.github/workflows/ci-develop.yml",
+            source,
+            StringComparison.Ordinal);
+        Assert.Contains("--source-ref \"$RELEASE_REF\"", source, StringComparison.Ordinal);
+        Assert.Contains(
+            "github.com/MALIEV-Co-Ltd/Maliev.SearchService/.github/workflows/ci-staging.yml",
+            source,
+            StringComparison.Ordinal);
         Assert.Contains("docker buildx imagetools create", source, StringComparison.Ordinal);
         Assert.Contains("--prefer-index=false", source, StringComparison.Ordinal);
         Assert.Contains("source_digest", source, StringComparison.OrdinalIgnoreCase);
@@ -184,6 +204,59 @@ public sealed class DeploymentWorkflowPolicyTests
 
         Assert.Contains("NUGET_USERNAME: ${{ github.actor }}", auditStep, StringComparison.Ordinal);
         Assert.Contains("NUGET_PASSWORD: ${{ secrets.gitops_pat }}", auditStep, StringComparison.Ordinal);
+        Assert.Contains("Assert-NoVulnerablePackages.ps1", auditStep, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A known HIGH advisory must make the package audit gate return a failing exit code.
+    /// </summary>
+    [Fact]
+    public void NuGetAuditGate_HighSeverityMicrosoftOpenApiFixtureReturnsFailure()
+    {
+        var script = RepositoryPath(".github", "scripts", "Assert-NoVulnerablePackages.ps1");
+        var fixture = RepositoryPath(
+            "Maliev.SearchService.Tests",
+            "Fixtures",
+            "microsoft-openapi-2.0.0-high.json");
+
+        Assert.True(File.Exists(script), $"Could not find audit gate: {script}");
+        Assert.True(File.Exists(fixture), $"Could not find audit fixture: {fixture}");
+
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = "pwsh",
+            ArgumentList =
+            {
+                "-NoProfile",
+                "-File",
+                script,
+                "-AuditJsonPath",
+                fixture
+            },
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        });
+
+        Assert.NotNull(process);
+        var standardOutput = process.StandardOutput.ReadToEnd();
+        var standardError = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+
+        Assert.NotEqual(0, process.ExitCode);
+        Assert.Contains("Microsoft.OpenApi", standardOutput + standardError, StringComparison.Ordinal);
+        Assert.Contains("High", standardOutput + standardError, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Artifact Registry publishing uses WIF and does not need GitHub Packages write access.
+    /// </summary>
+    [Fact]
+    public void DevelopWorkflow_DoesNotGrantUnusedPackagesWritePermission()
+    {
+        var source = ReadWorkflow("ci-develop.yml");
+
+        Assert.DoesNotContain("packages: write", source, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -225,15 +298,18 @@ public sealed class DeploymentWorkflowPolicyTests
 
     private static string ReadRepositoryFile(params string[] segments)
     {
-        var path = Path.GetFullPath(Path.Combine(
+        var path = RepositoryPath(segments);
+
+        Assert.True(File.Exists(path), $"Could not find repository file: {path}");
+        return File.ReadAllText(path);
+    }
+
+    private static string RepositoryPath(params string[] segments) =>
+        Path.GetFullPath(Path.Combine(
             AppContext.BaseDirectory,
             "..",
             "..",
             "..",
             "..",
             Path.Combine(segments)));
-
-        Assert.True(File.Exists(path), $"Could not find repository file: {path}");
-        return File.ReadAllText(path);
-    }
 }
