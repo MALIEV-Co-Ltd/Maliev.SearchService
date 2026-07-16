@@ -1,39 +1,47 @@
-# syntax=docker/dockerfile:1.4
-
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS base
-USER $APP_UID
-WORKDIR /app
-EXPOSE 8080
-EXPOSE 8081
+# syntax=docker/dockerfile:1.7
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 ARG BUILD_CONFIGURATION=Release
+ARG SERVICE_DEFAULTS_VERSION=1.0.89-alpha
+ARG MESSAGING_CONTRACTS_VERSION=1.0.94-alpha
 WORKDIR /src
-COPY ["Maliev.SearchService.Api/Maliev.SearchService.Api.csproj", "Maliev.SearchService.Api/"]
-COPY ["Maliev.SearchService.Domain/Maliev.SearchService.Domain.csproj", "Maliev.SearchService.Domain/"]
-COPY ["Maliev.SearchService.Application/Maliev.SearchService.Application.csproj", "Maliev.SearchService.Application/"]
-COPY ["Maliev.SearchService.Infrastructure/Maliev.SearchService.Infrastructure.csproj", "Maliev.SearchService.Infrastructure/"]
+
 COPY ["nuget.config", "."]
-RUN --mount=type=secret,id=nuget_username \
-  --mount=type=secret,id=nuget_password \
-  NUGET_USERNAME=$(cat /run/secrets/nuget_username) \
-  NUGET_PASSWORD=$(cat /run/secrets/nuget_password) \
-  dotnet restore "./Maliev.SearchService.Api/Maliev.SearchService.Api.csproj"
+COPY ["Directory.Build.props", "."]
+COPY ["Maliev.SearchService.Api/Maliev.SearchService.Api.csproj", "Maliev.SearchService.Api/"]
+COPY ["Maliev.SearchService.Application/Maliev.SearchService.Application.csproj", "Maliev.SearchService.Application/"]
+COPY ["Maliev.SearchService.Domain/Maliev.SearchService.Domain.csproj", "Maliev.SearchService.Domain/"]
+COPY ["Maliev.SearchService.Infrastructure/Maliev.SearchService.Infrastructure.csproj", "Maliev.SearchService.Infrastructure/"]
+
+RUN --mount=type=secret,id=nuget_username,required=true \
+    --mount=type=secret,id=nuget_password,required=true \
+    NUGET_USERNAME="$(cat /run/secrets/nuget_username)" \
+    NUGET_PASSWORD="$(cat /run/secrets/nuget_password)" \
+    dotnet restore "Maliev.SearchService.Api/Maliev.SearchService.Api.csproj" \
+      /p:GITHUB_ACTIONS=true \
+      /p:ServiceDefaultsVersion="$SERVICE_DEFAULTS_VERSION" \
+      /p:MessagingContractsVersion="$MESSAGING_CONTRACTS_VERSION"
+
 COPY . .
-WORKDIR "/src/Maliev.SearchService.Api"
-RUN dotnet build "./Maliev.SearchService.Api.csproj" -c $BUILD_CONFIGURATION -o /app/build
+WORKDIR /src/Maliev.SearchService.Api
+RUN dotnet publish "Maliev.SearchService.Api.csproj" \
+    --configuration "$BUILD_CONFIGURATION" \
+    --output /app/publish \
+    --no-restore \
+    /p:GITHUB_ACTIONS=true \
+    /p:ServiceDefaultsVersion="$SERVICE_DEFAULTS_VERSION" \
+    /p:MessagingContractsVersion="$MESSAGING_CONTRACTS_VERSION" \
+    /p:UseAppHost=false
 
-FROM build AS publish
-ARG BUILD_CONFIGURATION=Release
-RUN dotnet publish "./Maliev.SearchService.Api.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false
-
-FROM base AS final
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app
-RUN chown -R app:app /app
+COPY --chown=app:app --from=build /app/publish .
+
 USER app
-COPY --chown=app:app --from=publish /app/publish .
-ENV ASPNETCORE_URLS=http://+:8080
-ENV ASPNETCORE_ENVIRONMENT=Production
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:8080/search/liveness || exit 1
+EXPOSE 8080
+EXPOSE 8081
+ENV ASPNETCORE_HTTP_PORTS=8080 \
+    ASPNETCORE_ENVIRONMENT=Production \
+    DOTNET_EnableDiagnostics=0
+
 ENTRYPOINT ["dotnet", "Maliev.SearchService.Api.dll"]

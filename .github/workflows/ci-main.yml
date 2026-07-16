@@ -2,14 +2,154 @@ name: CI - Main
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: Existing verified staging release to promote (for example 1.2.3)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  build-and-test:
-    uses: ./.github/workflows/_build-and-test.yml
-    with:
-      solution_file: Maliev.SearchService.slnx
-      extra_args: -p:SharedLibraryVersion=1.0.*
-    secrets:
-      gitops_pat: ${{ secrets.GITOPS_PAT }}
+  promote-image:
+    name: Promote verified digest to production
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    permissions:
+      contents: read
+      attestations: read
+      id-token: write
+    env:
+      DEV_IMAGE: asia-southeast1-docker.pkg.dev/maliev-website/maliev-website-artifact-dev/maliev-search-service
+      SOURCE_IMAGE: asia-southeast1-docker.pkg.dev/maliev-website/maliev-website-artifact-staging/maliev-search-service
+      TARGET_IMAGE: asia-southeast1-docker.pkg.dev/maliev-website/maliev-website-artifact-prod/maliev-search-service
+    steps:
+      - name: Checkout approved source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve approved release
+        id: release
+        shell: bash
+        env:
+          INPUT_RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            release_version="$INPUT_RELEASE_VERSION"
+          else
+            mapfile -t release_tags < <(git tag --points-at "$GITHUB_SHA" --list 'release/v*')
+            if [ "${#release_tags[@]}" -ne 1 ]; then
+              echo "Main promotion requires exactly one release/v* tag on $GITHUB_SHA" >&2
+              exit 1
+            fi
+            release_version="${release_tags[0]#release/v}"
+          fi
+          [[ "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]
+          echo "release_version=$release_version" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to Google Cloud with WIF
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: maliev-website
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+        with:
+          project_id: maliev-website
+
+      - name: Configure Artifact Registry authentication
+        run: gcloud auth configure-docker asia-southeast1-docker.pkg.dev --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Resolve and verify staging digest
+        id: source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          source_digest="$(gcloud artifacts docker images describe "$SOURCE_IMAGE:$RELEASE_VERSION" --format='value(image_summary.digest)')"
+          [[ "$source_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          gh attestation verify "oci://$DEV_IMAGE@$source_digest" --repo "$GITHUB_REPOSITORY"
+          echo "source_digest=$source_digest" >> "$GITHUB_OUTPUT"
+
+      - name: Promote exact digest without rebuilding
+        id: promotion
+        shell: bash
+        env:
+          SOURCE_DIGEST: ${{ steps.source.outputs.source_digest }}
+          RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --prefer-index=false \
+            --tag "$TARGET_IMAGE:$RELEASE_VERSION" \
+            "$SOURCE_IMAGE@$SOURCE_DIGEST"
+          promoted_digest="$(gcloud artifacts docker images describe "$TARGET_IMAGE:$RELEASE_VERSION" --format='value(image_summary.digest)')"
+          test "$promoted_digest" = "$SOURCE_DIGEST"
+          echo "promoted_digest=$promoted_digest" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout GitOps evidence repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: MALIEV-Co-Ltd/maliev-gitops
+          token: ${{ secrets.GITOPS_PAT }}
+          path: maliev-gitops
+
+      - name: Install Kustomize
+        uses: imranismail/setup-kustomize@2ba527d4d055ab63514ba50a99456fc35684947f # v2
+
+      - name: Pin disabled production overlay to promoted digest
+        shell: bash
+        env:
+          PROMOTED_DIGEST: ${{ steps.promotion.outputs.promoted_digest }}
+        run: |
+          set -euo pipefail
+          cd maliev-gitops/3-apps/maliev-search-service/overlays/production
+          source_image="asia-southeast1-docker.pkg.dev/maliev-website/maliev-website-artifact/maliev-search-service"
+          kustomize edit set image "$source_image=$TARGET_IMAGE@$PROMOTED_DIGEST"
+          kustomize build . >/dev/null
+
+      - name: Create draft GitOps evidence PR
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITOPS_PAT }}
+          PROMOTED_DIGEST: ${{ steps.promotion.outputs.promoted_digest }}
+          RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          cd maliev-gitops
+          branch_name="search-service/prod-$RELEASE_VERSION-${GITHUB_RUN_ATTEMPT}"
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git switch -c "$branch_name"
+          git add 3-apps/maliev-search-service/overlays/production/kustomization.yaml
+          if git diff --staged --quiet; then
+            echo "No GitOps evidence change required"
+            exit 0
+          fi
+          git commit -m "chore(prod): record SearchService digest $PROMOTED_DIGEST"
+          git push origin "$branch_name"
+          gh pr create \
+            --draft \
+            --title "[DO NOT MERGE] chore(prod): update search-service evidence" \
+            --body "Evidence only: pins the disabled SearchService production overlay to $TARGET_IMAGE@$PROMOTED_DIGEST for approved release $RELEASE_VERSION. This is the exact attested staging digest; no image was rebuilt. Do not merge or activate any application." \
+            --base main \
+            --head "$branch_name" \
+            --repo MALIEV-Co-Ltd/maliev-gitops

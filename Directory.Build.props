@@ -2,7 +2,7 @@
   <PropertyGroup>
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
     <ServiceDefaultsVersion Condition="'$(ServiceDefaultsVersion)' == ''">1.0.89-alpha</ServiceDefaultsVersion>
-    <SharedLibraryVersion Condition="'$(SharedLibraryVersion)' == ''">1.0.*-alpha*</SharedLibraryVersion>
+    <MessagingContractsVersion Condition="'$(MessagingContractsVersion)' == ''">1.0.94-alpha</MessagingContractsVersion>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Update="Microsoft.AspNetCore.OpenApi" Version="10.0.3" />

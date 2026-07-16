@@ -18,6 +18,8 @@
 **/node_modules
 **/npm-debug.log
 **/obj
+.ci-nuget
+gha-creds-*.json
 **/secrets.dev.yaml
 **/values.dev.yaml
 LICENSE
