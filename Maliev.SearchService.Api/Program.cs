@@ -50,7 +50,8 @@ try
     builder.Services.AddHostedService<SearchReindexBootstrapService>();
 
     // --- IAM ---
-    builder.AddIAMServiceClient("search");
+    builder.AddAuthServiceTokenExchange("SearchService");
+    builder.AddAuthServiceIAMClient();
     builder.Services.AddIAMRegistration<SearchIAMRegistrationService>("search");
 
     // --- Controllers ---

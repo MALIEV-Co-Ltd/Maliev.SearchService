@@ -1,7 +1,8 @@
 <Project>
   <PropertyGroup>
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
-    <SharedLibraryVersion Condition="'$(SharedLibraryVersion)' == ''">1.0.*-*</SharedLibraryVersion>
+    <ServiceDefaultsVersion Condition="'$(ServiceDefaultsVersion)' == ''">1.0.89-alpha</ServiceDefaultsVersion>
+    <SharedLibraryVersion Condition="'$(SharedLibraryVersion)' == ''">1.0.*-alpha*</SharedLibraryVersion>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Update="Microsoft.AspNetCore.OpenApi" Version="10.0.3" />
