@@ -3,30 +3,164 @@ name: PR Validation
 on:
   pull_request:
     branches: [develop, staging, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  prep:
-    runs-on: ubuntu-latest
-    outputs:
-      version_format: ${{ steps.set-version.outputs.version_format }}
-    steps:
-      - id: set-version
-        run: |
-          BASE_BRANCH="${{ github.base_ref }}"
-          if [ "$BASE_BRANCH" = "main" ]; then
-            VERSION_FORMAT="1.0.*"
-          elif [ "$BASE_BRANCH" = "staging" ]; then
-            VERSION_FORMAT="1.0.*-beta*"
-          else
-            VERSION_FORMAT="1.0.*-alpha*"
-          fi
-          echo "version_format=$VERSION_FORMAT" >> "$GITHUB_OUTPUT"
-
   build-and-test:
-    needs: prep
+    permissions:
+      contents: read
+      packages: read
     uses: ./.github/workflows/_build-and-test.yml
     with:
       solution_file: Maliev.SearchService.slnx
-      extra_args: -p:SharedLibraryVersion=${{ needs.prep.outputs.version_format }}
+      extra_args: -p:GITHUB_ACTIONS=true -p:ServiceDefaultsVersion=1.0.89-alpha -p:MessagingContractsVersion=1.0.94-alpha
     secrets:
       gitops_pat: ${{ secrets.GITOPS_PAT }}
+
+  container:
+    name: Build and scan production image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    env:
+      IMAGE_TAG: maliev-search-service:pr-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build local production image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Maliev.SearchService.Api/Dockerfile
+          load: true
+          push: false
+          tags: ${{ env.IMAGE_TAG }}
+          build-args: |
+            SERVICE_DEFAULTS_VERSION=1.0.89-alpha
+            MESSAGING_CONTRACTS_VERSION=1.0.94-alpha
+          secrets: |
+            nuget_username=${{ github.actor }}
+            nuget_password=${{ secrets.GITOPS_PAT }}
+          cache-from: type=gha,scope=search-pr-container
+          cache-to: type=gha,mode=max,scope=search-pr-container
+
+      - name: Validate runtime image metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          metadata="$(docker image inspect "$IMAGE_TAG")"
+          test "$(jq -r '.[0].Config.User' <<< "$metadata")" = "app"
+          test "$(jq -c '.[0].Config.Entrypoint' <<< "$metadata")" = '["dotnet","Maliev.SearchService.Api.dll"]'
+          test "$(jq -r '.[0].Config.ExposedPorts | has("8080/tcp")' <<< "$metadata")" = "true"
+          test "$(jq -r '.[0].Config.Healthcheck == null' <<< "$metadata")" = "true"
+
+      - name: Smoke test production image liveness
+        shell: bash
+        run: |
+          set -euo pipefail
+          network_name="search-smoke-net-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          database_name="search-smoke-db-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          application_name="search-smoke-app-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          public_key="$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 2>/dev/null | openssl pkey -pubout | base64 -w0)"
+
+          cleanup() {
+            docker rm --force "$application_name" "$database_name" >/dev/null 2>&1 || true
+            docker network rm "$network_name" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker network create "$network_name" >/dev/null
+          docker run --detach \
+            --name "$database_name" \
+            --network "$network_name" \
+            --env POSTGRES_DB=search \
+            --env POSTGRES_USER=postgres \
+            --env POSTGRES_PASSWORD=search-smoke-password \
+            postgres:18-alpine >/dev/null
+
+          for attempt in {1..30}; do
+            if docker exec "$database_name" pg_isready --username postgres --dbname search >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              docker logs "$database_name"
+              exit 1
+            fi
+            sleep 1
+          done
+
+          docker run --detach \
+            --name "$application_name" \
+            --network "$network_name" \
+            --publish "127.0.0.1:18082:8080" \
+            --env ASPNETCORE_ENVIRONMENT=Testing \
+            --env Cache__RedisEnabled=false \
+            --env MassTransit__UseInMemory=true \
+            --env CORS__AllowedOrigins__0=http://localhost \
+            --env Jwt__PublicKey="$public_key" \
+            --env Jwt__Issuer=https://api.maliev.com \
+            --env Jwt__Audience=https://api.maliev.com \
+            --env ServiceAuthentication__ClientId=service-search-service \
+            --env ServiceAuthentication__ClientSecret=search-smoke-secret-with-at-least-32-bytes \
+            --env Services__AuthService__BaseUrl=http://127.0.0.1:9 \
+            --env Services__IAMService__BaseUrl=http://127.0.0.1:9 \
+            --env "ConnectionStrings__SearchDbContext=Host=$database_name;Port=5432;Database=search;Username=postgres;Password=search-smoke-password" \
+            "$IMAGE_TAG" >/dev/null
+
+          for attempt in {1..60}; do
+            if curl --fail --silent --show-error "http://127.0.0.1:18082/search/liveness" >/dev/null 2>&1; then
+              exit 0
+            fi
+            if [ "$(docker inspect --format '{{.State.Running}}' "$application_name")" != "true" ]; then
+              docker logs "$application_name"
+              exit 1
+            fi
+            sleep 1
+          done
+
+          docker logs "$application_name"
+          exit 1
+
+      - name: Generate image SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_TAG }}
+          format: cyclonedx
+          output: trivy-sbom.cdx.json
+          scanners: vuln
+          exit-code: "0"
+
+      - name: Validate SBOM output
+        run: test -s trivy-sbom.cdx.json
+
+      - name: Upload image SBOM evidence
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: search-image-sbom-${{ github.run_id }}-${{ github.run_attempt }}
+          path: trivy-sbom.cdx.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Scan image for high-severity vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_TAG }}
+          format: table
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          exit-code: "1"
