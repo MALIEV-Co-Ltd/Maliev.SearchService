@@ -1,0 +1,24 @@
+name: CI - Main
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/_build-and-test.yml
+    with:
+      solution_file: Maliev.SearchService.slnx
+      extra_args: -p:GITHUB_ACTIONS=true -p:ServiceDefaultsVersion=1.0.89-alpha -p:MessagingContractsVersion=1.0.94-alpha
+    secrets:
+      gitops_pat: ${{ secrets.GITOPS_PAT }}
