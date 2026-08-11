@@ -49,7 +49,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: MALIEV-Co-Ltd/Maliev.MessagingContracts
-          ref: 53173003ba9ab72d2ea140fbe30d71ae0885f8b7
+          ref: 9f581b02758fd1dd4252581deece3cb57b10f342
           path: .ci-shared/Maliev.MessagingContracts
           persist-credentials: false
 

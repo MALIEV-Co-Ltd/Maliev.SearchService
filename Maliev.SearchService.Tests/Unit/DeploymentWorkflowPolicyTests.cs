@@ -64,6 +64,7 @@ public sealed class DeploymentWorkflowPolicyTests
         Assert.DoesNotContain("id-token: write", source, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("repository: MALIEV-Co-Ltd/Maliev.Aspire", source, StringComparison.Ordinal);
         Assert.Contains("repository: MALIEV-Co-Ltd/Maliev.MessagingContracts", source, StringComparison.Ordinal);
+        Assert.Contains("ref: 9f581b02758fd1dd4252581deece3cb57b10f342", source, StringComparison.Ordinal);
         Assert.DoesNotContain("nuget_password", source, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("secrets.GITOPS_PAT", source, StringComparison.Ordinal);
     }
