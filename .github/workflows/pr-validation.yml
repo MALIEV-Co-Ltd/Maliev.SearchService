@@ -21,8 +21,6 @@ jobs:
     with:
       solution_file: Maliev.SearchService.slnx
       extra_args: -p:GITHUB_ACTIONS=true -p:ServiceDefaultsVersion=1.0.89-alpha -p:MessagingContractsVersion=1.0.94-alpha
-    secrets:
-      gitops_pat: ${{ secrets.GITOPS_PAT }}
 
   container:
     name: Build and scan production image
@@ -35,8 +33,24 @@ jobs:
       IMAGE_TAG: maliev-search-service:pr-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Checkout source
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
+
+      - name: Checkout Aspire shared source for container build
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: MALIEV-Co-Ltd/Maliev.Aspire
+          ref: 979e1bcb3c3ed9c414f652c94b56297543c031b2
+          path: .ci-shared/Maliev.Aspire
+          persist-credentials: false
+
+      - name: Checkout messaging contracts shared source for container build
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: MALIEV-Co-Ltd/Maliev.MessagingContracts
+          ref: 9f581b02758fd1dd4252581deece3cb57b10f342
+          path: .ci-shared/Maliev.MessagingContracts
           persist-credentials: false
 
       - name: Set up Docker Buildx
@@ -50,12 +64,6 @@ jobs:
           load: true
           push: false
           tags: ${{ env.IMAGE_TAG }}
-          build-args: |
-            SERVICE_DEFAULTS_VERSION=1.0.89-alpha
-            MESSAGING_CONTRACTS_VERSION=1.0.94-alpha
-          secrets: |
-            nuget_username=${{ github.actor }}
-            nuget_password=${{ secrets.GITOPS_PAT }}
           cache-from: type=gha,scope=search-pr-container
           cache-to: type=gha,mode=max,scope=search-pr-container
 

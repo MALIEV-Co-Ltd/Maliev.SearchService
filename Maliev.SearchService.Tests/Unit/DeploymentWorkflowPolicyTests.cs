@@ -62,6 +62,28 @@ public sealed class DeploymentWorkflowPolicyTests
         Assert.Contains("severity: HIGH,CRITICAL", source, StringComparison.Ordinal);
         Assert.DoesNotContain("environment:", source, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("id-token: write", source, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("repository: MALIEV-Co-Ltd/Maliev.Aspire", source, StringComparison.Ordinal);
+        Assert.Contains("repository: MALIEV-Co-Ltd/Maliev.MessagingContracts", source, StringComparison.Ordinal);
+        Assert.Contains("ref: 9f581b02758fd1dd4252581deece3cb57b10f342", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("nuget_password", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("secrets.GITOPS_PAT", source, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Build validation must consume immutable public shared sources without private package credentials.
+    /// </summary>
+    [Fact]
+    public void BuildWorkflow_UsesCredentialFreePinnedSharedSources()
+    {
+        var source = ReadWorkflow("_build-and-test.yml");
+
+        Assert.Contains("repository: MALIEV-Co-Ltd/Maliev.Aspire", source, StringComparison.Ordinal);
+        Assert.Contains("repository: MALIEV-Co-Ltd/Maliev.MessagingContracts", source, StringComparison.Ordinal);
+        Assert.Contains("-p:GITHUB_ACTIONS=false", source, StringComparison.Ordinal);
+        Assert.Contains("GITHUB_ACTIONS=false dotnet list", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("package --include-transitive --no-restore -p:", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("NUGET_PASSWORD", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("secrets.gitops_pat", source, StringComparison.Ordinal);
     }
 
     /// <summary>
