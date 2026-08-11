@@ -16,7 +16,7 @@ on:
         default: ""
     secrets:
       gitops_pat:
-        required: true
+        required: false
 
 jobs:
   build-and-test:
@@ -36,6 +36,22 @@ jobs:
           path: service
           persist-credentials: false
 
+      - name: Checkout Aspire shared source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: MALIEV-Co-Ltd/Maliev.Aspire
+          ref: 979e1bcb3c3ed9c414f652c94b56297543c031b2
+          path: Maliev.Aspire
+          persist-credentials: false
+
+      - name: Checkout messaging contracts shared source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: MALIEV-Co-Ltd/Maliev.MessagingContracts
+          ref: 53173003ba9ab72d2ea140fbe30d71ae0885f8b7
+          path: Maliev.MessagingContracts
+          persist-credentials: false
+
       - name: Set up .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
@@ -50,28 +66,22 @@ jobs:
             ${{ runner.os }}-search-nuget-
 
       - name: Restore exact package graph
-        run: dotnet restore ${{ inputs.solution_file }} ${{ inputs.extra_args }}
+        run: dotnet restore ${{ inputs.solution_file }} ${{ inputs.extra_args }} -p:GITHUB_ACTIONS=false
         working-directory: service
-        env:
-          NUGET_USERNAME: ${{ github.actor }}
-          NUGET_PASSWORD: ${{ secrets.gitops_pat }}
 
       - name: Record resolved package graph
-        run: dotnet list ${{ inputs.solution_file }} package --include-transitive --no-restore
+        run: dotnet list ${{ inputs.solution_file }} package --include-transitive --no-restore -p:GITHUB_ACTIONS=false
         working-directory: service
 
       - name: Build
-        run: dotnet build ${{ inputs.solution_file }} --no-restore --configuration ${{ inputs.configuration }} ${{ inputs.extra_args }}
+        run: dotnet build ${{ inputs.solution_file }} --no-restore --configuration ${{ inputs.configuration }} ${{ inputs.extra_args }} -p:GITHUB_ACTIONS=false
         working-directory: service
 
       - name: Test
-        run: dotnet test ${{ inputs.solution_file }} --no-build --no-restore --configuration ${{ inputs.configuration }} --verbosity normal ${{ inputs.extra_args }}
+        run: dotnet test ${{ inputs.solution_file }} --no-build --no-restore --configuration ${{ inputs.configuration }} --verbosity normal ${{ inputs.extra_args }} -p:GITHUB_ACTIONS=false
         working-directory: service
 
       - name: Audit resolved NuGet graph
         shell: pwsh
         run: ./.github/scripts/Assert-NoVulnerablePackages.ps1 -SolutionFile "${{ inputs.solution_file }}"
         working-directory: service
-        env:
-          NUGET_USERNAME: ${{ github.actor }}
-          NUGET_PASSWORD: ${{ secrets.gitops_pat }}
