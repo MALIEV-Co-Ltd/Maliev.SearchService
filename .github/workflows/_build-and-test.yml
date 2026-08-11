@@ -70,7 +70,7 @@ jobs:
         working-directory: service
 
       - name: Record resolved package graph
-        run: dotnet list ${{ inputs.solution_file }} package --include-transitive --no-restore -p:GITHUB_ACTIONS=false
+        run: GITHUB_ACTIONS=false dotnet list ${{ inputs.solution_file }} package --include-transitive --no-restore
         working-directory: service
 
       - name: Build

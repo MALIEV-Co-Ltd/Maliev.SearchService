@@ -79,6 +79,8 @@ public sealed class DeploymentWorkflowPolicyTests
         Assert.Contains("repository: MALIEV-Co-Ltd/Maliev.Aspire", source, StringComparison.Ordinal);
         Assert.Contains("repository: MALIEV-Co-Ltd/Maliev.MessagingContracts", source, StringComparison.Ordinal);
         Assert.Contains("-p:GITHUB_ACTIONS=false", source, StringComparison.Ordinal);
+        Assert.Contains("GITHUB_ACTIONS=false dotnet list", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("package --include-transitive --no-restore -p:", source, StringComparison.Ordinal);
         Assert.DoesNotContain("NUGET_PASSWORD", source, StringComparison.Ordinal);
         Assert.DoesNotContain("secrets.gitops_pat", source, StringComparison.Ordinal);
     }
