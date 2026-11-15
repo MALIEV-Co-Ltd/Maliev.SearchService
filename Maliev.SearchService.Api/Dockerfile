@@ -27,7 +27,7 @@ RUN dotnet publish "Maliev.SearchService.Api.csproj" \
     /p:GITHUB_ACTIONS=false \
     /p:UseAppHost=false
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
+FROM mcr.microsoft.com/dotnet/aspnet:11.0 AS final
 WORKDIR /app
 COPY --chown=app:app --from=build /app/publish .
 
